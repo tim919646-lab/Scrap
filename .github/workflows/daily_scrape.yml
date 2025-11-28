@@ -1,0 +1,38 @@
+name: Täglicher Scraper
+
+on:
+  schedule:
+    # Jeden Tag um 06:00 Uhr UTC (ca. 07:00 oder 08:00 Uhr deutscher Zeit)
+    - cron: '0 6 * * *'
+  workflow_dispatch: # Erlaubt dir, es auch manuell zu starten (zum Testen)
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Code auschecken
+      uses: actions/checkout@v3
+
+    - name: Python einrichten
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+
+    - name: Bibliotheken installieren
+      run: |
+        pip install requests beautifulsoup4
+
+    - name: Scraper ausführen
+      run: python scraper.py
+
+    - name: Datenbank speichern (Commit)
+      run: |
+        git config --global user.name 'Scraper Bot'
+        git config --global user.email 'bot@noreply.github.com'
+        git add meine_datenbank.csv
+        git commit -m "Daten-Update: $(date)" || echo "Keine Änderungen"
+        git push
