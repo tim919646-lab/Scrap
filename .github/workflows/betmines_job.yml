@@ -1,0 +1,37 @@
+name: BetMines Scraper
+
+on:
+  schedule:
+    - cron: '0 7 * * *' # Täglich 07:00 UTC (08:00 DE)
+  workflow_dispatch: # Manuell starten
+
+permissions:
+  contents: write
+
+jobs:
+  scrape_betmines:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Repo laden
+      uses: actions/checkout@v3
+
+    - name: Python Setup
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+
+    - name: Installieren
+      run: |
+        pip install selenium webdriver-manager beautifulsoup4
+
+    - name: BetMines Bot starten
+      run: python scraper_betmines.py
+
+    - name: Speichern
+      run: |
+        git config --global user.name 'BetMines Bot'
+        git config --global user.email 'bot@noreply.github.com'
+        git add betmines.csv
+        git commit -m "BetMines Update: $(date)" || echo "Keine Änderungen"
+        git push
