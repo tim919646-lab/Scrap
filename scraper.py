@@ -13,75 +13,69 @@ URL = "https://www.footballsuper.tips/football-accumulators-tips/football-tips-p
 DATEI_NAME = "meine_datenbank.csv"
 
 def hol_daten():
-    print("--- START SELENIUM SCRAPER ---")
+    print("--- START INTELLIGENT SCRAPER ---")
 
-    # 1. Chrome Setup (Headless = ohne Monitor)
+    # Chrome Setup
     chrome_options = Options()
     chrome_options.add_argument("--headless") 
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
-    # Wir tarnen uns als normaler Windows-PC
     chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
 
     service = Service(ChromeDriverManager().install())
     driver = webdriver.Chrome(service=service, options=chrome_options)
 
     try:
-        print(f"Öffne Seite: {URL}")
+        print(f"Lade Seite: {URL}")
         driver.get(URL)
-        
-        # WICHTIG: Wir warten 10 Sekunden, damit die Seite komplett lädt
-        print("Warte 10 Sekunden auf Ladevorgang...")
-        time.sleep(10)
+        time.sleep(8) # Kurze Wartezeit für Page-Load
 
-        # Holen des fertigen HTML-Codes
-        page_source = driver.page_source
+        soup = BeautifulSoup(driver.page_source, 'html.parser')
         
-        # Jetzt übergeben wir das an BeautifulSoup zum Analysieren
-        soup = BeautifulSoup(page_source, 'html.parser')
-        
-        daten_heute = []
         datum = datetime.now().strftime("%Y-%m-%d")
+        kandidaten = []
 
-        # Suche nach allen Text-Elementen
-        print("Analysiere Inhalte...")
-        all_elements = soup.find_all(['p', 'li', 'div', 'span'])
-        
-        gefunden_count = 0
+        # 1. Alles sammeln
+        all_elements = soup.find_all(['div', 'p', 'li', 'span', 'h2', 'h3'])
         
         for element in all_elements:
             text = element.get_text(" ", strip=True)
             
-            # --- FILTER LOGIK ---
-            # Wir suchen nach dem Wort "Odd" oder typischen Tipp-Strukturen
-            if "Odd:" in text or "Total Odd" in text:
-                # Duplikate vermeiden (manche Texte kommen doppelt vor im HTML)
-                is_duplicate = any(text in entry for entry in daten_heute)
+            # Muss "Odd:" enthalten
+            if "Odd:" in text:
+                # 2. Müll-Filter: Wenn diese Wörter vorkommen, ist es wahrscheinlich ein Container mit Werbung
+                if "Discover more" in text or "Football kits" in text or "Accumulator Today" in text:
+                    continue
                 
-                # Wir nehmen nur Texte mit vernünftiger Länge
-                if len(text) > 15 and len(text) < 400 and not is_duplicate:
-                    print(f"TREFFER: {text[:60]}...")
-                    daten_heute.append([datum, text])
-                    gefunden_count += 1
+                # Wir wollen nur Texte, die auch das Match (" v " oder " vs ") enthalten
+                # Damit filtern wir reine Quoten ohne Spielpaarung raus
+                if " v " in text or " vs " in text:
+                    if len(text) < 200: # Zu lange Texte sind meist Müll
+                        kandidaten.append(text)
 
-        # Speichern
-        if gefunden_count > 0:
+        # 3. Der Auswahl-Algorithmus
+        if kandidaten:
+            # Wir sortieren nach Länge. Der kürzeste Text ist meist der sauberste (ohne Menüs drumherum).
+            kandidaten.sort(key=len)
+            bester_treffer = kandidaten[0]
+            
+            print(f"Gewinner-Text: {bester_treffer}")
+
+            # Speichern
             datei_existiert = os.path.isfile(DATEI_NAME)
             with open(DATEI_NAME, 'a', newline='', encoding='utf-8') as f:
                 writer = csv.writer(f)
                 if not datei_existiert:
-                    writer.writerow(["Datum", "Tipp_Inhalt"])
+                    writer.writerow(["Datum", "Tipp"])
                 
-                for eintrag in daten_heute:
-                    writer.writerow(eintrag)
-            print(f"ERFOLG: {gefunden_count} Tipps gespeichert.")
+                # Wir schreiben nur diesen EINEN besten Treffer
+                writer.writerow([datum, bester_treffer])
+                print("Eintrag gespeichert.")
         else:
-            print("WARNUNG: Seite geladen, aber keine Tipps mit 'Odd:' gefunden. Prüfe Log.")
-            # Debugging: Zeige uns einen Teil des HTMLs, falls es scheitert
-            print("Seitenausschnitt:", soup.get_text()[:500])
+            print("Kein sauberer Tipp gefunden (Filter zu streng oder Seite leer).")
 
     except Exception as e:
-        print(f"KRITISCHER FEHLER: {e}")
+        print(f"FEHLER: {e}")
     finally:
         driver.quit()
 
