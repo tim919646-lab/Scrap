@@ -2,8 +2,8 @@ name: Ergebnis-Prüfer
 
 on:
   schedule:
-    - cron: '0 12 * * *' # Jeden Tag um 13:00 Uhr
-  workflow_dispatch: # Manuell starten
+    - cron: '0 12 * * *'
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -23,7 +23,9 @@ jobs:
 
     - name: Bibliotheken installieren
       run: |
-        pip install duckduckgo_search
+        pip install --upgrade pip
+        pip install duckduckgo_search==4.1.1 
+        # Wir fixieren die Version, da neuere Versionen manchmal Probleme machen
 
     - name: Checker ausführen
       run: python checker.py
@@ -33,5 +35,5 @@ jobs:
         git config --global user.name 'Checker Bot'
         git config --global user.email 'bot@noreply.github.com'
         git add meine_datenbank.csv
-        git commit -m "Ergebnisse aktualisiert: $(date)" || echo "Keine Updates"
+        git commit -m "Ergebnis-Update: $(date)" || echo "Keine Updates"
         git push
