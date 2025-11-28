@@ -5,7 +5,7 @@ from webdriver_manager.chrome import ChromeDriverManager
 from bs4 import BeautifulSoup
 import csv
 import time
-import re # Modul für Mustererkennung
+import re
 from datetime import datetime
 import os
 
@@ -15,8 +15,8 @@ DATEI_NAME = "meine_datenbank.csv"
 
 def parse_text(text):
     """
-    Versucht, den Text in Einzelteile zu zerlegen.
-    Format: "20:00 TippName in TeamA v TeamB LigaName Total Odd: 1.80"
+    Intelligente Zerlegung.
+    Funktioniert mit: "20:00 Tipp in Match..." UND "Tipp in Match..."
     """
     daten = {
         "Uhrzeit": "N/A",
@@ -25,41 +25,37 @@ def parse_text(text):
         "Quote": "N/A"
     }
     
-    # 1. Uhrzeit finden (Startet meist damit)
-    zeit_match = re.search(r'(\d{2}:\d{2})', text)
-    if zeit_match:
-        daten["Uhrzeit"] = zeit_match.group(1)
-        
-    # 2. Quote finden (Am Ende "Total Odd: 1.80")
-    quote_match = re.search(r'Total Odd:\s*([\d\.]+)', text)
+    # 1. Quote finden (Am Ende "Total Odd: 1.80")
+    quote_match = re.search(r'Odd:?\s*([\d\.]+)', text, re.IGNORECASE)
     if quote_match:
         daten["Quote"] = quote_match.group(1)
 
-    # 3. Match finden (Alles zwischen " in " und der Liga ist schwer, 
-    # daher nehmen wir alles zwischen " in " und "Total Odd", und versuchen " v " zu finden)
-    if " in " in text and " v " in text:
-        parts = text.split(" in ", 1) # Teile am ersten " in "
-        rest = parts[1] # "Oxford Utd v Ipswich England Championship Total Odd: 1.80"
+    # 2. Aufsplitten am Wort " in "
+    if " in " in text:
+        parts = text.split(" in ", 1)
+        linker_teil = parts[0].strip() # Hier steht Tipp (und evtl Uhrzeit)
+        rechter_teil = parts[1].strip() # Hier steht Match und Quote
         
-        # Schneide alles ab "Total Odd" weg
-        match_part = rest.split("Total Odd")[0].strip()
+        # A) Match isolieren (alles vor "Total Odd" oder "Odd")
+        match_raw = re.split(r'Total Odd|Odd:', rechter_teil, flags=re.IGNORECASE)[0]
+        daten["Match"] = match_raw.strip()
         
-        # Jetzt wird es knifflig: Die Liga steht hinter dem Match.
-        # Wir machen es uns einfach: Wir speichern den Teil "Team v Team ... Liga" als Match-Info.
-        daten["Match"] = match_part
+        # B) Uhrzeit und Tipp trennen
+        # Prüfen, ob der linke Teil mit einer Uhrzeit beginnt (z.B. "20:00 ")
+        zeit_match = re.match(r'^(\d{2}:\d{2})', linker_teil)
         
-        # Den Tipp isolieren (Alles vor dem " in ")
-        # Aber die Uhrzeit muss weg (ersten 6 Zeichen ca)
-        raw_tipp = parts[0]
-        if len(raw_tipp) > 6:
-            daten["Tipp"] = raw_tipp[6:].strip() # Schneidet "20:00 " ab
+        if zeit_match:
+            daten["Uhrzeit"] = zeit_match.group(1)
+            # Uhrzeit aus dem Tipp entfernen
+            daten["Tipp"] = linker_teil.replace(zeit_match.group(1), "").strip()
         else:
-            daten["Tipp"] = raw_tipp
+            # Keine Uhrzeit gefunden -> Der ganze linke Teil ist der Tipp
+            daten["Tipp"] = linker_teil
 
     return daten
 
 def hol_daten():
-    print("--- START STRUKTURIERTER SCRAPER ---")
+    print("--- START FIX SCRAPER ---")
 
     chrome_options = Options()
     chrome_options.add_argument("--headless") 
@@ -78,29 +74,24 @@ def hol_daten():
         datum = datetime.now().strftime("%Y-%m-%d")
         kandidaten = []
 
-        # 1. Sammeln
         all_elements = soup.find_all(['div', 'p', 'li', 'span'])
         for element in all_elements:
             text = element.get_text(" ", strip=True)
-            if "Odd:" in text and "Discover more" not in text and "Accumulator" not in text:
+            if "Odd:" in text and "Discover more" not in text:
                 if " v " in text or " vs " in text:
                     if len(text) < 200:
                         kandidaten.append(text)
 
-        # 2. Auswählen & Zerlegen
         if kandidaten:
             kandidaten.sort(key=len)
             bester_treffer = kandidaten[0]
             print(f"Rohdaten: {bester_treffer}")
             
-            # Hier passiert die Magie: Wir zerlegen den Text
             infos = parse_text(bester_treffer)
             
-            # Speichern in separaten Spalten
             datei_existiert = os.path.isfile(DATEI_NAME)
             with open(DATEI_NAME, 'a', newline='', encoding='utf-8') as f:
                 writer = csv.writer(f)
-                # Neue Kopfzeile!
                 if not datei_existiert:
                     writer.writerow(["Datum", "Uhrzeit", "Tipp", "Match_Info", "Quote", "Status", "Rohdaten"])
                 
@@ -110,10 +101,10 @@ def hol_daten():
                     infos["Tipp"], 
                     infos["Match"], 
                     infos["Quote"], 
-                    "Offen", # <--- Das brauchen wir für den Ergebnis-Checker!
+                    "Offen", 
                     bester_treffer
                 ])
-                print("Strukturierter Eintrag gespeichert.")
+                print("Gespeichert.")
         else:
             print("Nichts gefunden.")
 
