@@ -1,8 +1,8 @@
-name: Ergebnis-Prüfer (Selenium)
+name: Ergebnis-Prüfer (Stealth Mode)
 
 on:
   schedule:
-    - cron: '0 12 * * *'
+    - cron: '30 12 * * *' # 13:30 Uhr
   workflow_dispatch:
 
 permissions:
@@ -21,9 +21,10 @@ jobs:
       with:
         python-version: '3.9'
 
-    - name: Chrome installieren
+    - name: Hacker-Tools installieren
       run: |
-        pip install selenium webdriver-manager beautifulsoup4
+        # DrissionPage ist das Tool für Stealth-Requests
+        pip install DrissionPage
 
     - name: Checker ausführen
       run: python checker.py
@@ -33,5 +34,5 @@ jobs:
         git config --global user.name 'Checker Bot'
         git config --global user.email 'bot@noreply.github.com'
         git add meine_datenbank.csv
-        git commit -m "Ergebnis-Update: $(date)" || echo "Keine Updates"
+        git commit -m "Update: $(date)" || echo "Keine Updates"
         git push
