@@ -12,48 +12,61 @@ import urllib.parse
 
 DATEI_NAME = "meine_datenbank.csv"
 
-def google_search_result(match_info, driver):
+def bing_search_result(match_info, driver):
     """
-    Sucht auf Google nach dem Ergebnis.
+    Sucht auf Bing nach dem Ergebnis.
+    Bing ist oft "bot-freundlicher" als Google auf GitHub-Servern.
     """
-    # Wir reinigen den Suchbegriff: Nur die Teams, ohne Liga-Namen (verwirrt Google oft)
-    # Match Info ist z.B.: "Oxford Utd v Ipswich England Championship"
-    # Wir schneiden alles nach " v " ab und nehmen die 2 Worte davor und danach
+    # 1. Suchbegriff reinigen
     try:
         if " v " in match_info:
             parts = match_info.split(" v ")
             team_a = parts[0].strip()
-            team_b = parts[1].split("England")[0].strip() # Versuch Liga abzuschneiden
+            # Versuch, den Liga-Namen am Ende abzuschneiden (alles nach dem zweiten Team)
+            raw_team_b = parts[1]
+            # Wir nehmen an, dass das Team-B nur aus den ersten 2-3 Worten besteht
+            team_b_words = raw_team_b.split()[:2] 
+            team_b = " ".join(team_b_words)
+            
             query = f"{team_a} vs {team_b} score result"
         else:
-            query = f"{match_info} score result"
+            query = f"{match_info} result"
     except:
-        query = f"{match_info} score result"
+        query = f"{match_info} result"
 
-    print(f"   -> Google Suche: '{query}'")
+    print(f"   -> SUCHE BEI BING: '{query}'")
     
-    # URL sicher kodieren
     encoded_query = urllib.parse.quote(query)
-    driver.get(f"https://www.google.com/search?q={encoded_query}&hl=en")
+    driver.get(f"https://www.bing.com/search?q={encoded_query}&setmkt=en-US&setlang=en")
     
-    time.sleep(5) # Warten auf Ergebnisse
+    time.sleep(5) # Warten
     
+    # 2. DEBUG: Was sieht der Bot?
     try:
-        # Wir suchen nach den typischen Google-Ergebnis-Boxen
         body_text = driver.find_element(By.TAG_NAME, "body").text
+        # Wir drucken die ersten 200 Zeichen, um zu sehen, ob wir geblockt werden
+        print(f"   [DEBUG] Seiten-Anfang: {body_text[:200].replace(chr(10), ' ')}...")
         
-        # Regex Suche im ganzen Text nach "1-1" oder "2 : 0" oder "FT 1-1"
-        # Wir suchen nach Zahlen, die nah beieinander stehen
-        # Sucht nach Muster: Zahl Leerzeichen Bindestrich Leerzeichen Zahl
-        match = re.search(r'\b(\d+)\s*[-:]\s*(\d+)\b', body_text)
+        # 3. Ergebnis suchen (Mustererkennung)
+        # Suche nach "Oxford Utd 1 - 1 Ipswich" oder ähnlichem
+        # Regex sucht nach: Zahl [Bindestrich/Doppelpunkt] Zahl
+        # Wir suchen etwas aggressiver nach Ergebnissen
+        matches = re.findall(r'(\d+)\s*[-:]\s*(\d+)', body_text)
         
-        if match:
-            # Sicherheitscheck: Ist das Ergebnis plausibel? (Nicht 2025-11)
-            score = f"{match.group(1)}-{match.group(2)}"
-            # Wenn die Zahlen zu groß sind (Jahreszahlen), ignorieren
-            if int(match.group(1)) > 20 or int(match.group(2)) > 20:
-                return None
-            return score
+        # Filter: Wir nehmen nur Ergebnisse, die plausibel sind (keine Jahreszahlen 20-25)
+        # und nicht 0-0 (das ist oft Platzhalter vor dem Spiel, aber manchmal auch das Ergebnis)
+        
+        potenzielle_ergebnisse = []
+        for m in matches:
+            t1 = int(m[0])
+            t2 = int(m[1])
+            if t1 < 15 and t2 < 15: # Ein Fußballspiel endet selten 20:20
+                potenzielle_ergebnisse.append(f"{t1}-{t2}")
+        
+        if potenzielle_ergebnisse:
+            # Das erste gefundene Ergebnis bei Bing ist meistens das richtige (in der Info-Box oben)
+            print(f"   -> MÖGLICHE TREFFER: {potenzielle_ergebnisse}")
+            return potenzielle_ergebnisse[0]
             
     except Exception as e:
         print(f"   -> Fehler beim Lesen der Seite: {e}")
@@ -61,7 +74,7 @@ def google_search_result(match_info, driver):
     return None
 
 def check_results():
-    print("--- START SELENIUM CHECKER ---")
+    print("--- START BING CHECKER (DEBUG MODE) ---")
     
     if not os.path.isfile(DATEI_NAME):
         print("Datenbank nicht gefunden.")
@@ -72,6 +85,8 @@ def check_results():
     chrome_options.add_argument("--headless") 
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
+    # Englisch als Sprache erzwingen (besser für "Score")
+    chrome_options.add_argument("--lang=en-US")
     chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
     
     service = Service(ChromeDriverManager().install())
@@ -93,34 +108,36 @@ def check_results():
         for row in daten:
             if len(row) < 6: continue
             
-            # Spalte 5 ist Status, Spalte 3 ist Match Info
             status = row[5]
             match_info = row[3]
+            datum = row[0]
             
+            # Wir prüfen nur Zeilen, die "Offen" sind
             if status == "Offen":
-                print(f"Prüfe: {match_info}")
-                ergebnis = google_search_result(match_info, driver)
+                print(f"------------------------------------------------")
+                print(f"PRÜFE: {match_info} (Vom {datum})")
+                
+                ergebnis = bing_search_result(match_info, driver)
                 
                 if ergebnis:
-                    print(f"   -> GEFUNDEN: {ergebnis}")
+                    print(f"   -> !!! TREFFER !!!: {ergebnis}")
                     row[5] = f"Beendet ({ergebnis})"
                     updates = True
                 else:
-                    print("   -> Kein klares Ergebnis gefunden.")
+                    print("   -> Nichts gefunden. Bot sieht keine Zahlen.")
                 
-                time.sleep(3) # Kurze Pause
+                time.sleep(3)
 
     finally:
         driver.quit()
 
-    # Speichern
     if updates:
         with open(DATEI_NAME, 'w', newline='', encoding='utf-8') as f:
             writer = csv.writer(f)
             writer.writerows(zeilen)
         print("Update gespeichert.")
     else:
-        print("Keine neuen Ergebnisse.")
+        print("Keine neuen Ergebnisse gefunden.")
 
 if __name__ == "__main__":
     check_results()
