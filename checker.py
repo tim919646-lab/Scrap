@@ -3,7 +3,6 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
 from webdriver_manager.chrome import ChromeDriverManager
 from selenium.webdriver.common.by import By
-from selenium.webdriver.common.keys import Keys
 import csv
 import re
 import os
@@ -12,95 +11,152 @@ import urllib.parse
 
 DATEI_NAME = "meine_datenbank.csv"
 
-def bing_search_result(match_info, driver):
-    """
-    Sucht auf Bing nach dem Ergebnis.
-    Bing ist oft "bot-freundlicher" als Google auf GitHub-Servern.
-    """
-    # 1. Suchbegriff reinigen
-    try:
-        if " v " in match_info:
-            parts = match_info.split(" v ")
-            team_a = parts[0].strip()
-            # Versuch, den Liga-Namen am Ende abzuschneiden (alles nach dem zweiten Team)
-            raw_team_b = parts[1]
-            # Wir nehmen an, dass das Team-B nur aus den ersten 2-3 Worten besteht
-            team_b_words = raw_team_b.split()[:2] 
-            team_b = " ".join(team_b_words)
-            
-            query = f"{team_a} vs {team_b} score result"
-        else:
-            query = f"{match_info} result"
-    except:
-        query = f"{match_info} result"
+# --- HILFSFUNKTIONEN ---
 
-    print(f"   -> SUCHE BEI BING: '{query}'")
+def simplify_name(team_name):
+    """
+    Reduziert 'Oxford Utd' zu 'Oxford', 'Borussia Dortmund' zu 'Dortmund'.
+    Hilft beim Vergleichen.
+    """
+    ignore_words = ["FC", "Utd", "United", "City", "Town", "Real", "AC", "Inter", "Sporting", "Club", "v"]
+    parts = team_name.split()
     
-    encoded_query = urllib.parse.quote(query)
-    driver.get(f"https://www.bing.com/search?q={encoded_query}&setmkt=en-US&setlang=en")
-    
-    time.sleep(5) # Warten
-    
-    # 2. DEBUG: Was sieht der Bot?
-    try:
-        body_text = driver.find_element(By.TAG_NAME, "body").text
-        # Wir drucken die ersten 200 Zeichen, um zu sehen, ob wir geblockt werden
-        print(f"   [DEBUG] Seiten-Anfang: {body_text[:200].replace(chr(10), ' ')}...")
-        
-        # 3. Ergebnis suchen (Mustererkennung)
-        # Suche nach "Oxford Utd 1 - 1 Ipswich" oder ähnlichem
-        # Regex sucht nach: Zahl [Bindestrich/Doppelpunkt] Zahl
-        # Wir suchen etwas aggressiver nach Ergebnissen
-        matches = re.findall(r'(\d+)\s*[-:]\s*(\d+)', body_text)
-        
-        # Filter: Wir nehmen nur Ergebnisse, die plausibel sind (keine Jahreszahlen 20-25)
-        # und nicht 0-0 (das ist oft Platzhalter vor dem Spiel, aber manchmal auch das Ergebnis)
-        
-        potenzielle_ergebnisse = []
-        for m in matches:
-            t1 = int(m[0])
-            t2 = int(m[1])
-            if t1 < 15 and t2 < 15: # Ein Fußballspiel endet selten 20:20
-                potenzielle_ergebnisse.append(f"{t1}-{t2}")
-        
-        if potenzielle_ergebnisse:
-            # Das erste gefundene Ergebnis bei Bing ist meistens das richtige (in der Info-Box oben)
-            print(f"   -> MÖGLICHE TREFFER: {potenzielle_ergebnisse}")
-            return potenzielle_ergebnisse[0]
+    # Nimm das längste Wort, das nicht auf der Ignore-Liste steht
+    best_word = ""
+    for p in parts:
+        clean_p = p.strip()
+        if clean_p not in ignore_words and len(clean_p) > len(best_word):
+            best_word = clean_p
             
-    except Exception as e:
-        print(f"   -> Fehler beim Lesen der Seite: {e}")
-    
+    if not best_word and parts:
+        return parts[0] # Fallback
+    return best_word
+
+def extract_score_from_line(line):
+    """
+    Sucht nach Musters wie '1-1', '2 - 0', '1:0' in einer Textzeile.
+    """
+    # Regex: Zahl, evtl Leerzeichen, Bindestrich/Doppelpunkt, evtl Leerzeichen, Zahl
+    match = re.search(r'(\d+)\s*[-:]\s*(\d+)', line)
+    if match:
+        t1 = int(match.group(1))
+        t2 = int(match.group(2))
+        # Plausibilitätscheck: Kein Fußballspiel geht 20-25 aus (das ist ein Datum)
+        if t1 < 15 and t2 < 15:
+            return f"{t1}-{t2}"
     return None
 
+# --- DIE QUELLEN (SOURCES) ---
+
+def check_skysports(driver, datum, team_a, team_b):
+    try:
+        url = f"https://www.skysports.com/football-scores-fixtures/{datum}"
+        print(f"   [SkySports] Prüfe: {url}")
+        driver.get(url)
+        time.sleep(3)
+        
+        body_text = driver.find_element(By.TAG_NAME, "body").text
+        lines = body_text.split('\n')
+        
+        simple_a = simplify_name(team_a)
+        simple_b = simplify_name(team_b)
+        
+        for line in lines:
+            if simple_a in line and simple_b in line:
+                score = extract_score_from_line(line)
+                if score: return score
+    except Exception as e:
+        print(f"   [SkySports] Fehler: {e}")
+    return None
+
+def check_tipsomatic(driver, datum, team_a, team_b):
+    try:
+        # Tipsomatic Format: games/date-YYYY-MM-DD
+        url = f"https://tipsomatic.com/games/date-{datum}"
+        print(f"   [Tipsomatic] Prüfe: {url}")
+        driver.get(url)
+        time.sleep(3)
+        
+        body_text = driver.find_element(By.TAG_NAME, "body").text
+        lines = body_text.split('\n')
+        
+        simple_a = simplify_name(team_a)
+        simple_b = simplify_name(team_b)
+
+        for line in lines:
+            # Tipsomatic schreibt Teams oft weit auseinander, wir suchen im Block
+            if simple_a in line and simple_b in line:
+                score = extract_score_from_line(line)
+                if score: return score
+    except:
+        pass
+    return None
+
+def check_bbc(driver, datum, team_a, team_b):
+    try:
+        url = f"https://www.bbc.com/sport/football/scores-fixtures/{datum}"
+        print(f"   [BBC] Prüfe: {url}")
+        driver.get(url)
+        time.sleep(3)
+        
+        body_text = driver.find_element(By.TAG_NAME, "body").text
+        # BBC ist komplex, wir suchen einfach im Textdump
+        simple_a = simplify_name(team_a)
+        simple_b = simplify_name(team_b)
+        
+        if simple_a in body_text and simple_b in body_text:
+            # Wenn beide Teams auf der Seite sind, versuchen wir die Zeile zu finden
+            lines = body_text.split('\n')
+            for line in lines:
+                if simple_a in line and simple_b in line:
+                    score = extract_score_from_line(line)
+                    if score: return score
+    except:
+        pass
+    return None
+
+def check_bing_fallback(driver, match_info):
+    try:
+        query = f"{match_info} final score"
+        print(f"   [Bing] Fallback Suche: {query}")
+        driver.get(f"https://www.bing.com/search?q={urllib.parse.quote(query)}")
+        time.sleep(4)
+        
+        body = driver.find_element(By.TAG_NAME, "body").text
+        # Wir nehmen das allererste Ergebnis, das wie ein Score aussieht
+        score = extract_score_from_line(body[:500]) # Nur oben suchen
+        return score
+    except:
+        pass
+    return None
+
+# --- HAUPTPROGRAMM ---
+
 def check_results():
-    print("--- START BING CHECKER (DEBUG MODE) ---")
+    print("--- START MULTI-SOURCE CHECKER ---")
     
     if not os.path.isfile(DATEI_NAME):
         print("Datenbank nicht gefunden.")
         return
 
-    # Chrome starten
+    # Chrome Setup
     chrome_options = Options()
     chrome_options.add_argument("--headless") 
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
-    # Englisch als Sprache erzwingen (besser für "Score")
-    chrome_options.add_argument("--lang=en-US")
     chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
     
     service = Service(ChromeDriverManager().install())
     driver = webdriver.Chrome(service=service, options=chrome_options)
 
-    # Daten lesen
+    # Daten laden
     zeilen = []
     with open(DATEI_NAME, 'r', encoding='utf-8') as f:
         reader = list(csv.reader(f))
         zeilen = reader
 
-    if len(zeilen) < 2:
-        return
-
+    if len(zeilen) < 2: return
+    
     daten = zeilen[1:]
     updates = False
 
@@ -109,25 +165,50 @@ def check_results():
             if len(row) < 6: continue
             
             status = row[5]
-            match_info = row[3]
-            datum = row[0]
+            match_info = row[3] # "Oxford Utd v Ipswich..."
+            datum = row[0]      # "2025-11-28"
             
-            # Wir prüfen nur Zeilen, die "Offen" sind
             if status == "Offen":
                 print(f"------------------------------------------------")
-                print(f"PRÜFE: {match_info} (Vom {datum})")
+                print(f"ANALYSING: {match_info} ({datum})")
                 
-                ergebnis = bing_search_result(match_info, driver)
+                # Teams extrahieren
+                if " v " in match_info:
+                    parts = match_info.split(" v ")
+                    team_a = parts[0]
+                    team_b = parts[1].split("England")[0] # Versuch Liga abzuschneiden
+                else:
+                    team_a = match_info
+                    team_b = ""
+
+                ergebnis = None
                 
+                # 1. VERSUCH: SkySports
+                if not ergebnis:
+                    ergebnis = check_skysports(driver, datum, team_a, team_b)
+                
+                # 2. VERSUCH: Tipsomatic
+                if not ergebnis:
+                    ergebnis = check_tipsomatic(driver, datum, team_a, team_b)
+                    
+                # 3. VERSUCH: BBC
+                if not ergebnis:
+                    ergebnis = check_bbc(driver, datum, team_a, team_b)
+                    
+                # 4. VERSUCH: Bing (Notnagel)
+                if not ergebnis:
+                    ergebnis = check_bing_fallback(driver, match_info)
+
+                # FAZIT
                 if ergebnis:
                     print(f"   -> !!! TREFFER !!!: {ergebnis}")
                     row[5] = f"Beendet ({ergebnis})"
                     updates = True
                 else:
-                    print("   -> Nichts gefunden. Bot sieht keine Zahlen.")
-                
-                time.sleep(3)
+                    print("   -> Alle Quellen geprüft. Kein Ergebnis gefunden.")
 
+    except Exception as e:
+        print(f"KRITISCHER FEHLER: {e}")
     finally:
         driver.quit()
 
@@ -137,7 +218,7 @@ def check_results():
             writer.writerows(zeilen)
         print("Update gespeichert.")
     else:
-        print("Keine neuen Ergebnisse gefunden.")
+        print("Keine Updates.")
 
 if __name__ == "__main__":
     check_results()
