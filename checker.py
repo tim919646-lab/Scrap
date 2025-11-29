@@ -9,16 +9,14 @@ DATEI_NAME = "meine_datenbank.csv"
 
 def get_stealth_result(match_info, driver):
     """
-    Sucht intelligent und prüft auf 'Full Time' Status.
+    Sucht intelligent und filtert Uhrzeiten (15:00) raus.
     """
-    # 1. Suchbegriff
     try:
         if " v " in match_info:
             parts = match_info.split(" v ")
             team_a = parts[0].replace("Utd", "").strip()
             team_b_raw = parts[1]
             team_b = team_b_raw.split("England")[0].split("Germany")[0].strip().split()[0]
-            # Wir fügen "Result" hinzu, um Vorschauen zu vermeiden
             query = f"{team_a} {team_b} final score result"
         else:
             query = f"{match_info} final score"
@@ -27,58 +25,44 @@ def get_stealth_result(match_info, driver):
 
     print(f"   -> Stealth-Suche: '{query}'")
     
-    # DuckDuckGo HTML
     url = f"https://html.duckduckgo.com/html/?q={query}"
     driver.get(url)
     
-    # Wir holen alle Suchergebnis-Schnipsel einzeln
-    # DuckDuckGo HTML nutzt die Klasse 'result__snippet' für den Text
     snippets = driver.eles('.result__snippet')
     
     for snippet in snippets:
         text = snippet.text
         
-        # 2. Suche nach Ergebnis (Zahl-Zahl)
         matches = re.findall(r'(\d+)\s*[-:]\s*(\d+)', text)
         
         for m in matches:
             t1 = int(m[0])
             t2 = int(m[1])
             
-            # Filter: Unmögliche Ergebnisse raus
-            if t1 > 15 or t2 > 15: continue
+            # --- DER NEUE STRENGE FILTER ---
+            # Kein Team schießt mehr als 9 Tore (filtert 10:00, 15:00, 19:30 etc.)
+            if t1 > 9 or t2 > 9: 
+                continue
             
             found_score = f"{t1}-{t2}"
-            
-            # --- DER NEUE FILTER ---
-            
-            # Wir suchen nach Beweisen, dass das Spiel VORBEI ist
-            # Wir wandeln den Text in Kleinbuchstaben um für den Vergleich
             text_lower = text.lower()
-            
             keywords = ["ft", "full time", "final", "finished", "ended", "full-time"]
-            
             is_finished = any(k in text_lower for k in keywords)
             
-            # REGEL 1: Wenn das Ergebnis "0-0" ist, MUSS "FT" oder "Final" dabei stehen.
+            # Regel: 0-0 braucht Beweis (FT)
             if t1 == 0 and t2 == 0:
                 if is_finished:
-                    print(f"   -> Valides 0-0 gefunden (mit '{keywords}'): {text[:50]}...")
                     return found_score
                 else:
-                    # Ignorieren, wahrscheinlich Vorschau
                     continue
             
-            # REGEL 2: Bei anderen Ergebnissen sind wir toleranter, aber bevorzugen "FT"
-            # Wenn wir ein klares Ergebnis wie 2-1 finden, ist die Chance hoch, dass es stimmt.
-            # Aber wir prüfen sicherheitshalber, ob es nicht "Previous results: 2-1" heißt.
-            if "previous" not in text_lower and "last match" not in text_lower:
-                return found_score
+            # Alle anderen Ergebnisse (z.B. 2-1) nehmen wir an
+            return found_score
 
     return None
 
 def check_results():
-    print("--- START STEALTH CHECKER (SMART FILTER) ---")
+    print("--- START STEALTH CHECKER (ANTI-TIME BUG) ---")
     
     if not os.path.isfile(DATEI_NAME): return
 
@@ -108,38 +92,41 @@ def check_results():
             status = row[5]
             match_info = row[3]
             
-            # Wir prüfen alles, was NICHT "Beendet" ist
-            # WICHTIG: Wenn da schon "Beendet (0-0)" steht (falsch), müssen wir es manuell korrigieren oder ignorieren.
-            # Mein Code prüft nur Zeilen, wo NICHT "Beendet" steht, ODER wo "0-0" steht (um Fehler zu korrigieren)
-            
             needs_check = False
+            
+            # 1. Normale offene Spiele prüfen
             if "Beendet" not in status:
                 needs_check = True
-            elif "0-0" in status:
-                # Wir prüfen 0-0 Ergebnisse nochmal nach, falls sie falsch waren
-                print(f"Prüfe verdächtiges 0-0: {match_info}")
-                needs_check = True
             
+            # 2. FEHLER-KORREKTUR: "15-0" finden und neu prüfen!
+            # Wir prüfen einfach, ob eine Zahl > 9 im Status steht
+            elif "Beendet" in status:
+                # Suche nach Zahlen im Status
+                nums = re.findall(r'\d+', status)
+                for n in nums:
+                    if int(n) > 9: # Aha! 15-0 entdeckt!
+                        print(f"Ungültiges Ergebnis entdeckt ({status}). Korrigiere...")
+                        needs_check = True
+                        break
+
             if needs_check:
                 print(f"Prüfe: {match_info}")
-                
                 ergebnis = get_stealth_result(match_info, page)
                 
                 if ergebnis:
-                    # Wenn wir ein neues Ergebnis haben
+                    # Wenn neu gefunden
                     if str(ergebnis) not in status: 
                         print(f"   -> TREFFER: {ergebnis}")
                         row[5] = f"Beendet ({ergebnis})"
                         updates = True
                 else:
-                    print("   -> Kein finales Ergebnis gefunden (Spiel läuft noch oder Vorschau).")
-                    # Wenn wir vorher fälschlicherweise "Beendet 0-0" hatten und jetzt nichts finden,
-                    # setzen wir es zurück auf Offen!
-                    if "0-0" in status:
-                        row[5] = "Offen (Korrektur: War Vorschau)"
+                    print("   -> Kein Ergebnis.")
+                    # Wenn wir vorher "15-0" hatten und jetzt nichts finden -> Zurücksetzen!
+                    if "15-0" in status or "15-" in status or "-15" in status:
+                        row[5] = "Offen (Korrektur: War Uhrzeit)"
                         updates = True
                     elif "Beendet" not in status:
-                        row[5] = f"Offen (Geprüft {jetzt})"
+                        row[5] = f"Offen (Geprüft {jetzt}: Nichts)"
                         updates = True
                 
                 time.sleep(2)
