@@ -1,4 +1,4 @@
-name: Ergebnis-Prüfer
+name: Ergebnis-Prüfer (Selenium)
 
 on:
   schedule:
@@ -21,11 +21,9 @@ jobs:
       with:
         python-version: '3.9'
 
-    - name: Bibliotheken installieren
+    - name: Chrome installieren
       run: |
-        pip install --upgrade pip
-        pip install duckduckgo_search==4.1.1 
-        # Wir fixieren die Version, da neuere Versionen manchmal Probleme machen
+        pip install selenium webdriver-manager beautifulsoup4
 
     - name: Checker ausführen
       run: python checker.py
