@@ -1,100 +1,85 @@
-from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.chrome.service import Service
-from webdriver_manager.chrome import ChromeDriverManager
-from selenium.webdriver.common.by import By
+from DrissionPage import ChromiumPage, ChromiumOptions
 import csv
-import re
 import os
 import time
+import re
 from datetime import datetime
-import urllib.parse
 
 DATEI_NAME = "meine_datenbank.csv"
 
-def clean_team_name(name):
+def get_stealth_result(match_info, driver):
     """
-    Entfernt alles, was die Suche verwirren könnte.
+    Nutzt DrissionPage (Stealth), um Google zu befragen.
     """
-    # Liste von Wörtern, die wir löschen
-    blacklist = ["Utd", "United", "FC", "F.C.", "City", "Town", "Rovers", "County", "Athletic", "Real", "Sporting"]
-    
-    parts = name.split()
-    clean_parts = [p for p in parts if p not in blacklist]
-    
-    # Wenn nach dem Löschen nichts übrig bleibt, nehmen wir das Original
-    if not clean_parts:
-        return name
-        
-    # Wir nehmen nur das erste Wort, das ist meistens der Hauptname (z.B. "Oxford", "Ipswich")
-    return clean_parts[0]
-
-def google_search_score(match_info, driver):
-    """
-    Googelt aggressiv nach dem Ergebnis.
-    """
+    # 1. Suchbegriff säubern
     try:
         if " v " in match_info:
             parts = match_info.split(" v ")
-            team_a = clean_team_name(parts[0])
-            # Beim zweiten Team schneiden wir Liganamen ab
-            raw_b = parts[1].split("England")[0].split("Germany")[0].split("Italy")[0]
-            team_b = clean_team_name(raw_b)
+            team_a = parts[0].replace("Utd", "").strip()
+            # Vom zweiten Team alles nach dem Namen abschneiden
+            team_b_raw = parts[1]
+            team_b = team_b_raw.split("England")[0].split("Germany")[0].strip().split()[0]
             
-            # Suchanfrage: "Oxford Ipswich score"
-            query = f"{team_a} {team_b} score"
+            # Suchanfrage: "Oxford Ipswich final score"
+            query = f"{team_a} {team_b} final score"
         else:
             query = f"{match_info} score"
     except:
         query = match_info
 
-    print(f"   -> Google Suche: '{query}'")
+    print(f"   -> Stealth-Suche: '{query}'")
     
-    url = f"https://www.google.com/search?q={urllib.parse.quote(query)}&hl=en"
+    # Wir rufen DuckDuckGo auf (die HTML Version, die ist super schnell und blockt nicht)
+    url = f"https://html.duckduckgo.com/html/?q={query}"
+    
     driver.get(url)
-    time.sleep(4)
     
-    # Wir suchen im gesamten Text der Google-Seite nach einem Ergebnis-Muster
-    try:
-        body = driver.find_element(By.TAG_NAME, "body").text
+    # Wir suchen im Ergebnis-Text
+    # DuckDuckGo HTML liefert Ergebnisse in "result__snippet" Klassen
+    
+    # Wir holen den ganzen Text der Seite
+    body_text = driver.ele('tag:body').text
+    
+    # Regex Suche nach Ergebnissen (1-1, 2:1, etc.)
+    matches = re.findall(r'(\d+)\s*[-:]\s*(\d+)', body_text)
+    
+    best_match = None
+    
+    for m in matches:
+        t1 = int(m[0])
+        t2 = int(m[1])
         
-        # Muster: Eine kleine Zahl, Trennzeichen, eine kleine Zahl
-        # Wir filtern Jahreszahlen und Uhrzeiten raus
-        matches = re.findall(r'(\d+)\s*[-:]\s*(\d+)', body)
+        # Filter:
+        # Datum (28-11, 20-25) rausfiltern
+        if t1 > 15 or t2 > 15: continue
         
-        for m in matches:
-            t1 = int(m[0])
-            t2 = int(m[1])
-            
-            # Plausibilität: Fußballergebnisse sind < 10 (meistens)
-            # Datum (2025) oder Uhrzeit (19:00) sind > 10
-            if t1 < 10 and t2 < 10:
-                found = f"{t1}-{t2}"
-                print(f"   -> TREFFER im Text: {found}")
-                return found
-    except Exception as e:
-        print(f"   -> Lesefehler: {e}")
-
+        # Uhrzeiten (19-30) rausfiltern
+        if t1 > 10 and t2 > 10: continue
+        
+        # Das erste plausible Ergebnis ist meistens das richtige
+        best_match = f"{t1}-{t2}"
+        # Wir geben es sofort zurück
+        return best_match
+        
     return None
 
 def check_results():
-    print("--- START AGGRESSIVE CHECKER ---")
+    print("--- START STEALTH CHECKER (DrissionPage) ---")
     
     if not os.path.isfile(DATEI_NAME): return
 
-    # Maximale Tarnung
-    chrome_options = Options()
-    chrome_options.add_argument("--headless=new") 
-    chrome_options.add_argument("--no-sandbox")
-    chrome_options.add_argument("--disable-dev-shm-usage")
-    chrome_options.add_argument("--lang=en-US")
-    chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+    # --- STEALTH SETUP ---
+    # Das hier umgeht die Bot-Erkennung
+    co = ChromiumOptions()
+    co.set_argument('--headless=new') # Ohne Monitor
+    co.set_argument('--no-sandbox')
+    # Wir setzen einen echten User-Agent
+    co.set_user_agent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36')
     
-    service = Service(ChromeDriverManager().install())
-    driver = webdriver.Chrome(service=service, options=chrome_options)
+    # Browser starten
+    page = ChromiumPage(co)
 
     zeilen = []
-    # Datei lesen
     with open(DATEI_NAME, 'r', encoding='utf-8') as f:
         reader = list(csv.reader(f))
         zeilen = reader
@@ -113,34 +98,36 @@ def check_results():
             status = row[5]
             match_info = row[3]
             
-            # Wir fassen alles an, was nicht "Beendet" ist
+            # Wir prüfen alles, was nicht "Beendet" ist
             if "Beendet" not in status:
                 print(f"Prüfe: {match_info}")
                 
-                ergebnis = google_search_score(match_info, driver)
+                ergebnis = get_stealth_result(match_info, page)
                 
                 if ergebnis:
-                    print(f"   -> GEWONNEN: {ergebnis}")
+                    print(f"   -> TREFFER: {ergebnis}")
                     row[5] = f"Beendet ({ergebnis})"
                     updates = True
                 else:
                     print("   -> Nichts gefunden.")
-                    # WICHTIG: Wir ändern den Status trotzdem, um zu beweisen, dass wir schreiben können!
-                    row[5] = f"Offen (Geprüft um {jetzt}: Nichts)"
+                    # Wir aktualisieren den Status, damit wir sehen, dass es lief
+                    row[5] = f"Offen (Stealth-Check {jetzt}: Nichts)"
                     updates = True
                 
-                time.sleep(3) # Wartezeit für Google
+                time.sleep(2)
+
+    except Exception as e:
+        print(f"FEHLER: {e}")
     finally:
-        driver.quit()
+        page.quit()
 
     if updates:
-        # Schreiben erzwingen
         with open(DATEI_NAME, 'w', newline='', encoding='utf-8') as f:
             writer = csv.writer(f)
             writer.writerows(zeilen)
-        print("Update in CSV geschrieben.")
+        print("Datenbank aktualisiert.")
     else:
-        print("Keine Updates nötig.")
+        print("Keine Updates.")
 
 if __name__ == "__main__":
     check_results()
