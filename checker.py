@@ -9,74 +9,84 @@ DATEI_NAME = "meine_datenbank.csv"
 
 def get_stealth_result(match_info, driver):
     """
-    Nutzt DrissionPage (Stealth), um Google zu befragen.
+    Sucht intelligent und prüft auf 'Full Time' Status.
     """
-    # 1. Suchbegriff säubern
+    # 1. Suchbegriff
     try:
         if " v " in match_info:
             parts = match_info.split(" v ")
             team_a = parts[0].replace("Utd", "").strip()
-            # Vom zweiten Team alles nach dem Namen abschneiden
             team_b_raw = parts[1]
             team_b = team_b_raw.split("England")[0].split("Germany")[0].strip().split()[0]
-            
-            # Suchanfrage: "Oxford Ipswich final score"
-            query = f"{team_a} {team_b} final score"
+            # Wir fügen "Result" hinzu, um Vorschauen zu vermeiden
+            query = f"{team_a} {team_b} final score result"
         else:
-            query = f"{match_info} score"
+            query = f"{match_info} final score"
     except:
         query = match_info
 
     print(f"   -> Stealth-Suche: '{query}'")
     
-    # Wir rufen DuckDuckGo auf (die HTML Version, die ist super schnell und blockt nicht)
+    # DuckDuckGo HTML
     url = f"https://html.duckduckgo.com/html/?q={query}"
-    
     driver.get(url)
     
-    # Wir suchen im Ergebnis-Text
-    # DuckDuckGo HTML liefert Ergebnisse in "result__snippet" Klassen
+    # Wir holen alle Suchergebnis-Schnipsel einzeln
+    # DuckDuckGo HTML nutzt die Klasse 'result__snippet' für den Text
+    snippets = driver.eles('.result__snippet')
     
-    # Wir holen den ganzen Text der Seite
-    body_text = driver.ele('tag:body').text
-    
-    # Regex Suche nach Ergebnissen (1-1, 2:1, etc.)
-    matches = re.findall(r'(\d+)\s*[-:]\s*(\d+)', body_text)
-    
-    best_match = None
-    
-    for m in matches:
-        t1 = int(m[0])
-        t2 = int(m[1])
+    for snippet in snippets:
+        text = snippet.text
         
-        # Filter:
-        # Datum (28-11, 20-25) rausfiltern
-        if t1 > 15 or t2 > 15: continue
+        # 2. Suche nach Ergebnis (Zahl-Zahl)
+        matches = re.findall(r'(\d+)\s*[-:]\s*(\d+)', text)
         
-        # Uhrzeiten (19-30) rausfiltern
-        if t1 > 10 and t2 > 10: continue
-        
-        # Das erste plausible Ergebnis ist meistens das richtige
-        best_match = f"{t1}-{t2}"
-        # Wir geben es sofort zurück
-        return best_match
-        
+        for m in matches:
+            t1 = int(m[0])
+            t2 = int(m[1])
+            
+            # Filter: Unmögliche Ergebnisse raus
+            if t1 > 15 or t2 > 15: continue
+            
+            found_score = f"{t1}-{t2}"
+            
+            # --- DER NEUE FILTER ---
+            
+            # Wir suchen nach Beweisen, dass das Spiel VORBEI ist
+            # Wir wandeln den Text in Kleinbuchstaben um für den Vergleich
+            text_lower = text.lower()
+            
+            keywords = ["ft", "full time", "final", "finished", "ended", "full-time"]
+            
+            is_finished = any(k in text_lower for k in keywords)
+            
+            # REGEL 1: Wenn das Ergebnis "0-0" ist, MUSS "FT" oder "Final" dabei stehen.
+            if t1 == 0 and t2 == 0:
+                if is_finished:
+                    print(f"   -> Valides 0-0 gefunden (mit '{keywords}'): {text[:50]}...")
+                    return found_score
+                else:
+                    # Ignorieren, wahrscheinlich Vorschau
+                    continue
+            
+            # REGEL 2: Bei anderen Ergebnissen sind wir toleranter, aber bevorzugen "FT"
+            # Wenn wir ein klares Ergebnis wie 2-1 finden, ist die Chance hoch, dass es stimmt.
+            # Aber wir prüfen sicherheitshalber, ob es nicht "Previous results: 2-1" heißt.
+            if "previous" not in text_lower and "last match" not in text_lower:
+                return found_score
+
     return None
 
 def check_results():
-    print("--- START STEALTH CHECKER (DrissionPage) ---")
+    print("--- START STEALTH CHECKER (SMART FILTER) ---")
     
     if not os.path.isfile(DATEI_NAME): return
 
-    # --- STEALTH SETUP ---
-    # Das hier umgeht die Bot-Erkennung
     co = ChromiumOptions()
-    co.set_argument('--headless=new') # Ohne Monitor
+    co.set_argument('--headless=new')
     co.set_argument('--no-sandbox')
-    # Wir setzen einen echten User-Agent
     co.set_user_agent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36')
     
-    # Browser starten
     page = ChromiumPage(co)
 
     zeilen = []
@@ -98,21 +108,39 @@ def check_results():
             status = row[5]
             match_info = row[3]
             
-            # Wir prüfen alles, was nicht "Beendet" ist
+            # Wir prüfen alles, was NICHT "Beendet" ist
+            # WICHTIG: Wenn da schon "Beendet (0-0)" steht (falsch), müssen wir es manuell korrigieren oder ignorieren.
+            # Mein Code prüft nur Zeilen, wo NICHT "Beendet" steht, ODER wo "0-0" steht (um Fehler zu korrigieren)
+            
+            needs_check = False
             if "Beendet" not in status:
+                needs_check = True
+            elif "0-0" in status:
+                # Wir prüfen 0-0 Ergebnisse nochmal nach, falls sie falsch waren
+                print(f"Prüfe verdächtiges 0-0: {match_info}")
+                needs_check = True
+            
+            if needs_check:
                 print(f"Prüfe: {match_info}")
                 
                 ergebnis = get_stealth_result(match_info, page)
                 
                 if ergebnis:
-                    print(f"   -> TREFFER: {ergebnis}")
-                    row[5] = f"Beendet ({ergebnis})"
-                    updates = True
+                    # Wenn wir ein neues Ergebnis haben
+                    if str(ergebnis) not in status: 
+                        print(f"   -> TREFFER: {ergebnis}")
+                        row[5] = f"Beendet ({ergebnis})"
+                        updates = True
                 else:
-                    print("   -> Nichts gefunden.")
-                    # Wir aktualisieren den Status, damit wir sehen, dass es lief
-                    row[5] = f"Offen (Stealth-Check {jetzt}: Nichts)"
-                    updates = True
+                    print("   -> Kein finales Ergebnis gefunden (Spiel läuft noch oder Vorschau).")
+                    # Wenn wir vorher fälschlicherweise "Beendet 0-0" hatten und jetzt nichts finden,
+                    # setzen wir es zurück auf Offen!
+                    if "0-0" in status:
+                        row[5] = "Offen (Korrektur: War Vorschau)"
+                        updates = True
+                    elif "Beendet" not in status:
+                        row[5] = f"Offen (Geprüft {jetzt})"
+                        updates = True
                 
                 time.sleep(2)
 
